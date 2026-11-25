@@ -8,6 +8,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
+    // المتغيرات دي هتتظبط في Vercel
     const token = process.env.GITHUB_TOKEN;
     const owner = process.env.GITHUB_OWNER;
     const repo = process.env.GITHUB_REPO;
@@ -18,9 +19,9 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Server configuration error (Env Vars missing)' });
     }
 
-    const dbUrl = `${GITHUB_API(owner, repo, 'products.json')}?ref=${branch}`;
+    const dbUrl = `${GITHUB_API(owner, repo, 'db.json')}?ref=${branch}`;
 
-    // Helper: Get DB
+    // دوال مساعدة للتعامل مع جيت هب
     async function getDB() {
         const getRes = await fetch(dbUrl, {
             headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Vercel-App' }
@@ -28,15 +29,16 @@ export default async function handler(req, res) {
         if (!getRes.ok) throw new Error('GitHub read failed');
         const fileData = await getRes.json();
         const db = JSON.parse(Buffer.from(fileData.content, 'base64').toString('utf-8'));
+        // تأكد من وجود الهيكل الأساسي
         if (!db.products) db.products = {};
         if (!db.categories) db.categories = ["Laptops", "Mouse", "Accessories", "Other"];
+        if (!db.settings) db.settings = { password: defaultPass };
         if (!db.activity) db.activity = [];
         return { db, sha: fileData.sha };
     }
 
-    // Helper: Update DB
     async function updateDB(db, sha, message) {
-        const updateRes = await fetch(GITHUB_API(owner, repo, 'products.json'), {
+        const updateRes = await fetch(GITHUB_API(owner, repo, 'db.json'), {
             method: 'PUT',
             headers: {
                 Authorization: `Bearer ${token}`,
@@ -53,11 +55,9 @@ export default async function handler(req, res) {
         if (!updateRes.ok) throw new Error('GitHub write failed');
     }
 
-    // Helper: Upload File to GitHub
     async function uploadFileToGitHub(fileName, base64Content) {
         const filePath = `files/${Date.now()}-${fileName}`;
         const uploadUrl = GITHUB_API(owner, repo, filePath);
-        
         const uploadRes = await fetch(uploadUrl, {
             method: 'PUT',
             headers: {
@@ -71,7 +71,6 @@ export default async function handler(req, res) {
                 branch: branch
             })
         });
-        
         if (!uploadRes.ok) throw new Error('Failed to upload file to GitHub');
         return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
     }
@@ -85,13 +84,16 @@ export default async function handler(req, res) {
     // === GET Endpoints ===
     if (req.method === 'GET') {
         try {
-            // Get All Products
             if (req.query.action === 'get-products') {
                 const { db } = await getDB();
                 return res.status(200).json({ products: Object.values(db.products) });
             }
 
-            // Get Products by Category / Filter
+            if (req.query.action === 'get-categories') {
+                const { db } = await getDB();
+                return res.status(200).json({ categories: db.categories });
+            }
+
             if (req.query.action === 'filter') {
                 const { category } = req.query;
                 const { db } = await getDB();
@@ -102,13 +104,6 @@ export default async function handler(req, res) {
                 return res.status(200).json({ products });
             }
 
-            // Get Categories
-            if (req.query.action === 'get-categories') {
-                const { db } = await getDB();
-                return res.status(200).json({ categories: db.categories });
-            }
-
-            // Get Activity Log
             if (req.query.action === 'get-activity') {
                 const { db } = await getDB();
                 return res.status(200).json({ logs: db.activity || [] });
@@ -123,18 +118,15 @@ export default async function handler(req, res) {
         const { action, adminPassword } = req.body;
         try {
             const { db, sha } = await getDB();
-            const storedPass = db.password || defaultPass;
+            const storedPass = db.settings?.password || defaultPass;
 
-            // Login
             if (action === 'login') {
                 if (adminPassword === storedPass) return res.status(200).json({ success: true });
                 return res.status(401).json({ error: 'Unauthorized' });
             }
 
-            // Check Auth
             if (adminPassword !== storedPass) return res.status(401).json({ error: 'Unauthorized' });
 
-            // Add Product
             if (action === 'add-product') {
                 const { name, description, price, category, imageUrl, imageData, imageName } = req.body;
                 if (!name || !price) return res.status(400).json({ error: 'Name and Price are required' });
@@ -144,20 +136,15 @@ export default async function handler(req, res) {
 
                 const productId = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
                 db.products[productId] = {
-                    id: productId,
-                    name,
-                    description,
-                    price: parseFloat(price),
-                    category: category || 'Other',
-                    imageUrl: finalImageUrl || '',
-                    createdAt: new Date().toISOString()
+                    id: productId, name, description,
+                    price: parseFloat(price), category: category || 'Other',
+                    imageUrl: finalImageUrl || '', createdAt: new Date().toISOString()
                 };
                 logActivity(db, `Added product: ${name}`);
                 await updateDB(db, sha, `Add: ${name}`);
                 return res.status(200).json({ success: true, productId });
             }
 
-            // Edit Product
             if (action === 'edit-product') {
                 const { productId, name, description, price, category, imageUrl, imageData, imageName } = req.body;
                 if (!db.products[productId]) return res.status(404).json({ error: 'Product not found' });
@@ -178,7 +165,6 @@ export default async function handler(req, res) {
                 return res.status(200).json({ success: true });
             }
 
-            // Delete Product
             if (action === 'delete-product') {
                 const { productId } = req.body;
                 if (!db.products[productId]) return res.status(404).json({ error: 'Product not found' });
@@ -189,11 +175,10 @@ export default async function handler(req, res) {
                 return res.status(200).json({ success: true });
             }
 
-            // Change Password
             if (action === 'change-password') {
                 const { newPassword } = req.body;
                 if (!newPassword || newPassword.length < 4) return res.status(400).json({ error: 'Password too short' });
-                db.password = newPassword;
+                db.settings.password = newPassword;
                 logActivity(db, `Admin password changed`);
                 await updateDB(db, sha, `Password changed`);
                 return res.status(200).json({ success: true });
