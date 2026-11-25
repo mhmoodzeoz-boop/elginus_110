@@ -1,6 +1,29 @@
 {
-  "products": {},
-  "categories": ["Laptops", "Mouse", "Accessories", "Other"],
-  "activity": [],
-  "password": "mklopmklop"
+  "products": {
+    "mwwdono9w8wi": {
+      "id": "mwwdono9w8wi",
+      "name": "Test Laptop",
+      "description": "A test product",
+      "price": 1000,
+      "category": "Laptops",
+      "imageUrl": "",
+      "createdAt": "2026-11-25T17:09:07.929Z"
+    }
+  },
+  "categories": [
+    "Laptops",
+    "Mouse",
+    "Accessories",
+    "Other"
+  ],
+  "activity": [
+    {
+      "timestamp": "2026-11-25T17:09:07.930Z",
+      "description": "Added product: Test Laptop"
+    }
+  ],
+  "password": "mklopmklop",
+  "settings": {
+    "password": "mklopmklop"
+  }
 }
