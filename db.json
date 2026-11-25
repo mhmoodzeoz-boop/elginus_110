@@ -1,15 +1,5 @@
 {
-  "products": {
-    "mwwdono9w8wi": {
-      "id": "mwwdono9w8wi",
-      "name": "Test Laptop",
-      "description": "A test product",
-      "price": 1000,
-      "category": "Laptops",
-      "imageUrl": "",
-      "createdAt": "2026-11-25T17:09:07.929Z"
-    }
-  },
+  "products": {},
   "categories": [
     "Laptops",
     "Mouse",
@@ -17,6 +7,10 @@
     "Other"
   ],
   "activity": [
+    {
+      "timestamp": "2026-11-25T17:13:38.061Z",
+      "description": "Deleted product: Test Laptop"
+    },
     {
       "timestamp": "2026-11-25T17:09:07.930Z",
       "description": "Added product: Test Laptop"
