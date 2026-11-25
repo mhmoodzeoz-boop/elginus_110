@@ -8,20 +8,16 @@ export default async function handler(req, res) {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
-    // المتغيرات دي هتتظبط في Vercel
     const token = process.env.GITHUB_TOKEN;
     const owner = process.env.GITHUB_OWNER;
     const repo = process.env.GITHUB_REPO;
     const branch = process.env.GITHUB_BRANCH || 'main';
     const defaultPass = process.env.ADMIN_PASSWORD || 'mklopmklop';
 
-    if (!token || !owner || !repo) {
-        return res.status(500).json({ error: 'Server configuration error (Env Vars missing)' });
-    }
+    if (!token || !owner || !repo) return res.status(500).json({ error: 'Missing Env Vars' });
 
     const dbUrl = `${GITHUB_API(owner, repo, 'db.json')}?ref=${branch}`;
 
-    // دوال مساعدة للتعامل مع جيت هب
     async function getDB() {
         const getRes = await fetch(dbUrl, {
             headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Vercel-App' }
@@ -29,7 +25,6 @@ export default async function handler(req, res) {
         if (!getRes.ok) throw new Error('GitHub read failed');
         const fileData = await getRes.json();
         const db = JSON.parse(Buffer.from(fileData.content, 'base64').toString('utf-8'));
-        // تأكد من وجود الهيكل الأساسي
         if (!db.products) db.products = {};
         if (!db.categories) db.categories = ["Laptops", "Mouse", "Accessories", "Other"];
         if (!db.settings) db.settings = { password: defaultPass };
@@ -71,7 +66,7 @@ export default async function handler(req, res) {
                 branch: branch
             })
         });
-        if (!uploadRes.ok) throw new Error('Failed to upload file to GitHub');
+        if (!uploadRes.ok) throw new Error('Failed to upload file');
         return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
     }
 
@@ -81,39 +76,27 @@ export default async function handler(req, res) {
         if (db.activity.length > 100) db.activity = db.activity.slice(0, 100);
     }
 
-    // === GET Endpoints ===
+    // === GET ===
     if (req.method === 'GET') {
         try {
             if (req.query.action === 'get-products') {
                 const { db } = await getDB();
                 return res.status(200).json({ products: Object.values(db.products) });
             }
-
             if (req.query.action === 'get-categories') {
                 const { db } = await getDB();
                 return res.status(200).json({ categories: db.categories });
             }
-
-            if (req.query.action === 'filter') {
-                const { category } = req.query;
+            if (req.query.action === 'get-theme') {
                 const { db } = await getDB();
-                let products = Object.values(db.products);
-                if (category && category !== 'all') {
-                    products = products.filter(p => p.category === category);
-                }
-                return res.status(200).json({ products });
-            }
-
-            if (req.query.action === 'get-activity') {
-                const { db } = await getDB();
-                return res.status(200).json({ logs: db.activity || [] });
+                return res.status(200).json({ theme: db.settings.theme || null });
             }
         } catch (error) {
             return res.status(500).json({ error: 'Internal server error: ' + error.message });
         }
     }
 
-    // === POST Endpoints ===
+    // === POST ===
     if (req.method === 'POST') {
         const { action, adminPassword } = req.body;
         try {
@@ -127,60 +110,75 @@ export default async function handler(req, res) {
 
             if (adminPassword !== storedPass) return res.status(401).json({ error: 'Unauthorized' });
 
-            if (action === 'add-product') {
-                const { name, description, price, category, imageUrl, imageData, imageName } = req.body;
-                if (!name || !price) return res.status(400).json({ error: 'Name and Price are required' });
+            // Add/Edit Product
+            if (action === 'add-product' || action === 'edit-product') {
+                const { name, description, price, category, imageUrl, imageData, imageName, productId } = req.body;
+                if (!name || !price) return res.status(400).json({ error: 'Name and Price required' });
 
                 let finalImageUrl = imageUrl;
                 if (imageData && imageName) finalImageUrl = await uploadFileToGitHub(imageName, imageData);
 
-                const productId = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
-                db.products[productId] = {
-                    id: productId, name, description,
-                    price: parseFloat(price), category: category || 'Other',
-                    imageUrl: finalImageUrl || '', createdAt: new Date().toISOString()
-                };
-                logActivity(db, `Added product: ${name}`);
-                await updateDB(db, sha, `Add: ${name}`);
-                return res.status(200).json({ success: true, productId });
+                if (action === 'add-product') {
+                    const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+                    db.products[id] = { id, name, description, price: parseFloat(price), category, imageUrl: finalImageUrl || '', createdAt: new Date().toISOString() };
+                    logActivity(db, `Added: ${name}`);
+                    await updateDB(db, sha, `Add: ${name}`);
+                    return res.status(200).json({ success: true, productId: id });
+                } else {
+                    if (!db.products[productId]) return res.status(404).json({ error: 'Not found' });
+                    db.products[productId] = { ...db.products[productId], name, description, price: parseFloat(price), category, imageUrl: finalImageUrl };
+                    logActivity(db, `Edited: ${name}`);
+                    await updateDB(db, sha, `Edit: ${name}`);
+                    return res.status(200).json({ success: true });
+                }
             }
 
-            if (action === 'edit-product') {
-                const { productId, name, description, price, category, imageUrl, imageData, imageName } = req.body;
-                if (!db.products[productId]) return res.status(404).json({ error: 'Product not found' });
-                
-                let finalImageUrl = imageUrl || db.products[productId].imageUrl;
-                if (imageData && imageName) finalImageUrl = await uploadFileToGitHub(imageName, imageData);
-
-                db.products[productId] = {
-                    ...db.products[productId],
-                    name: name || db.products[productId].name,
-                    description: description || db.products[productId].description,
-                    price: price ? parseFloat(price) : db.products[productId].price,
-                    category: category || db.products[productId].category,
-                    imageUrl: finalImageUrl
-                };
-                logActivity(db, `Edited product: ${name}`);
-                await updateDB(db, sha, `Edit: ${name}`);
-                return res.status(200).json({ success: true });
-            }
-
+            // Delete Product
             if (action === 'delete-product') {
                 const { productId } = req.body;
-                if (!db.products[productId]) return res.status(404).json({ error: 'Product not found' });
+                if (!db.products[productId]) return res.status(404).json({ error: 'Not found' });
                 const name = db.products[productId].name;
                 delete db.products[productId];
-                logActivity(db, `Deleted product: ${name}`);
+                logActivity(db, `Deleted: ${name}`);
                 await updateDB(db, sha, `Delete: ${name}`);
                 return res.status(200).json({ success: true });
             }
 
+            // Add Category
+            if (action === 'add-category') {
+                const { category } = req.body;
+                if (!category) return res.status(400).json({ error: 'Category required' });
+                if (!db.categories.includes(category)) db.categories.push(category);
+                logActivity(db, `Added category: ${category}`);
+                await updateDB(db, sha, `Category: ${category}`);
+                return res.status(200).json({ success: true });
+            }
+
+            // Delete Category
+            if (action === 'delete-category') {
+                const { category } = req.body;
+                db.categories = db.categories.filter(c => c !== category);
+                logActivity(db, `Deleted category: ${category}`);
+                await updateDB(db, sha, `Del Cat: ${category}`);
+                return res.status(200).json({ success: true });
+            }
+
+            // Change Password
             if (action === 'change-password') {
                 const { newPassword } = req.body;
-                if (!newPassword || newPassword.length < 4) return res.status(400).json({ error: 'Password too short' });
+                if (!newPassword || newPassword.length < 4) return res.status(400).json({ error: 'Too short' });
                 db.settings.password = newPassword;
-                logActivity(db, `Admin password changed`);
+                logActivity(db, `Password changed`);
                 await updateDB(db, sha, `Password changed`);
+                return res.status(200).json({ success: true });
+            }
+
+            // Change Theme
+            if (action === 'change-theme') {
+                const { theme } = req.body; // { gold, red, bg }
+                db.settings.theme = theme;
+                logActivity(db, `Theme updated`);
+                await updateDB(db, sha, `Theme updated`);
                 return res.status(200).json({ success: true });
             }
         } catch (error) {
